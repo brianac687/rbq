@@ -1,0 +1,392 @@
+---
+title: Two-Level System
+jupyter: python3
+---
+
+
+In this notebook, we will be building up the two-level RbQ simulation of absorbing an incoming coherent state. First, we consider a constant coupling between the atom and light, no dissipation. We show this matches with the expected calculation from the Schrodinger equation. Then, we include dissipation. Then, we include the derived optimal coupling pulse with dissipation to show that the stored information does not go to 0 when you optimize your control pulse.
+
+I am considering interaction between an atom and 1D light field as outlined in RbQ Method Overleaf (freespace2level pdf). A single coherent beam interacting with a single atom has the Hamiltonian:
+
+$$\hat{H} = g \hat{\textbf{a}}(t)\hat{\sigma}_+ + g^* \hat{\textbf{a}}^\dagger(t)\hat{\sigma}_-$$
+
+- $g$ is the coupling betwen the light and atom.
+- $\hat{\textbf{a}}(t)$ is a bath operator which is different at each point in time (?). This is defined as $\hat{\textbf{a}}(t)= \hat{a}_0(t) + \alpha(t) $, where $\hat{a}_0(t)$ is the vacuum annihilation operator. 
+
+For simplicity, I am considering the case where the driving field (photon) is coherent ($\alpha$ and $g$ are both real) interacts with a two-level system (TLS). We also ignore the vacuum field, which is under the assumption that the $\alpha$ is much larger than vacuum. Eventually, we will have to account for vacuum since our $\alpha$ is small. This leads to:
+
+$$\hat{H} = -g(t)\alpha(t) \hat{\sigma}_x$$
+
+We will solve this time-dependent Hamiltonian (solved in Qutip found in https://qutip.org/docs/4.7/guide/dynamics/dynamics-time.html) and determine the expectation value of the atom's state, to see if the atom has "spun up" as expected.
+
+
+```{python}
+import matplotlib.pyplot as plt
+import qutip
+from qutip import *
+import numpy as np
+import scipy.integrate as integrate
+from scipy.ndimage import gaussian_filter1d
+```
+
+I am going to put code here as a reminder to Qutip notation: see Overleaf for more details.
+
+```{python}
+up = basis(2, 0) # up state
+print(up)
+print(sigmam() * up) # if in the excited state, should end up in the ground state
+print(sigmap() * up) # if in the excited state, we have raised the qubit state out of the truncated TLS Hilbert space, yielding [0; 0] 
+
+down = basis(2, 1) # down state
+print(down)
+print(sigmam() * down) # if in the ground state, we have lowered the qubit state out of the truncated TLS Hilbert space, yielding [0; 0] 
+print(sigmap() * down) # if in the ground state, should end up in the excited state
+
+print(expect(sigmaz(), up)) # +1 for up spin
+print(expect(sigmaz(), down)) # -1 for down spin
+```
+
+First, we will assume the incoming wavepacket $\alpha(t)$ has a Gaussian profile. The average occupation number $N$ (number of photons) in the pulse $\alpha$ is given by $$N=\int_{-\infty}^\infty{|\alpha(t)|^2 dt}$$ 
+
+So, the normalized expression for a pulse with $N=1$ is:
+
+$$\alpha(t) = \sqrt{\frac{1}{\sigma\sqrt{\pi}}} e^{-(x-\mu)^2/2\sigma^2}$$
+
+where $\mu$, $\sigma$ are the mean and standard deviation of the Gaussian, respectively. This expression describes the average energy of a single photon. A temporal mode is a BASIS with energy equal to 1. 
+
+I am currently assuming that the coupling strength $g$ is constant. 
+
+```{python}
+### INPUT PARAMETERS
+T = 10 # total time (input pulse "duration")
+N = 1000 # number of time steps
+time = np.linspace(0, T, N)
+
+mu, sigma = 5/2, 5/10
+# Returned area-normalized Gaussian
+def gaussian(mu, sigma, t):
+    return np.sqrt(1/(sigma*np.sqrt(np.pi))) * np.exp(-((t-mu)**2) / (2*sigma**2))
+
+### INPUT COHERENT STATE
+def alpha_in(t):
+    a = 0.1 # small amplitude
+    return a*(gaussian(mu, sigma, t)) # + np.random.normal(0, sigma*0.01, 1)) # Gaussian input
+alpha = alpha_in(time)
+print("Area of alpha:", integrate.simps(alpha**2, time))
+
+### COUPLING PARAMETER
+g = 1 # coupling strength between atom and light
+```
+
+```{python}
+### HAMILTONIAN CONSTRUCTION
+def H1_coeff_const_g(t, args): # Hamiltonian coefficient for constant g
+    return g * alpha_in(t) 
+
+H0 = Qobj([[0, 0], [0, 0]]) # time-independent part of Hamiltonian
+H1 = Qobj([[0, 1], [1, 0]])
+H = [H0,[H1, H1_coeff_const_g]] 
+```
+
+Here, we can see the coupling shape needed to maximally spin up kind of matches the math in the Gorshkov paper. This shape intuitively makes sense because you have a large increase in the coupling at the beginning to "record" as much of the incoming pulse as possible. 
+
+```{python}
+g_opt = []
+for i in range(0, len(time)):
+    if i == 0: g_test = 0
+    else: g_test = (np.pi/2)/integrate.simps(alpha[0:i+1], time[0:i+1]) # coupling that "maximizes" overlap integral
+    g_opt.append(g_test)
+plt.plot(time, alpha, label='Input pulse α_in(t)')
+plt.plot(time, g_opt, label='g(t)')
+#plt.ylim([0, 10])
+```
+
+The spin value is defined as: $ S(t) = \langle \hat{\sigma}_- \rangle $ where $ \hat{\sigma}_- = | g \rangle \langle e |$. If we define an atom's state $\ket{\psi}= c_g\ket{g} + c_e\ket{e}$, this makes the expectation value $$\langle S \rangle = c_g^*c_e$$ 
+
+We will use $S$ as a metric for how much of the incoming pulse is stored in the atom's excited state because we are considering weak signals, aka signals where the amplitude of the input pulse is small and therefore $c_g \sim 1$ at all times. We are trying to maximize the excited state probability $c_e$, which is equivalent in this limit to maximizing $S$.
+
+Note that in the case outside of this limit, it is possible that even if the atom is excited/spun up all the way ($c_e=1$),  $S=0$ because $c_g = 0$.
+
+```{python}
+# DISSIPATION OPERATORS (collapse operators)
+c_op_list = []
+
+### SIMULATE: starting from the ground state, solve Schrodinger equation (no dissipation) 
+psi0 = basis(2, 1) # |g> (see above)
+result = mesolve(H, psi0, time, c_op_list) 
+
+# Verify the correct probability of ground/excited state indices
+i=2
+print(result.states[i])
+print(result.states[i][0][0])
+print(result.states[i][1][0])
+```
+
+```{python}
+prob_ground = [] # probability of finding state in |g>
+prob_excited = [] # probability of finding state in |e>
+S_expect = [] # expectation value of lowering operator
+
+for i in range(0, len(result.states)):
+    p_g, p_e = result.states[i][1][0], result.states[i][0][0]
+    S = expect(sigmam(), result.states[i])
+    if S != p_g.conjugate()*p_e: print("Mismatch: ", S, p_e*p_g.conjugate())
+    S_expect = np.append(S_expect, S)
+    
+    prob_ground = np.append(prob_ground, abs(p_g)**2)
+    prob_excited = np.append(prob_excited, abs(p_e)**2)
+
+print('Final S: ', abs(S_expect[-1]))
+print("Max excited state population:", max(prob_excited))
+print("Final excited state population:", prob_excited[-1])
+```
+
+```{python}
+plt.figure(figsize=(6,4))
+plt.plot(time, abs(S_expect))
+plt.ylabel(r'$\langle S \rangle$'); plt.xlabel('Time'); plt.grid()
+
+fig, ax1 = plt.subplots(figsize=(6, 4))
+color = 'tab:blue'
+ax1.set_xlabel('Time')
+ax1.set_ylabel('Ground State Probability', color=color)
+ax1.plot(time, prob_ground, label='Ground State', color=color)
+ax1.tick_params(axis='y', labelcolor=color)
+ax1.grid()
+
+ax2 = ax1.twinx()
+color = 'tab:orange'
+ax2.set_ylabel('Excited State Probability', color=color)
+ax2.plot(time, prob_excited, label='Excited State', color=color)
+ax2.tick_params(axis='y', labelcolor=color)
+
+plt.title('Ground and Excited State Probabilities')
+plt.tight_layout()
+plt.show()
+```
+
+### Checking simulation analytically
+We can check the results of this mesolve by calculating the time-evolution operator ourselves. From the pdf: $\hat{H}$ commutes with itself at different times so the expansion for the time evolution operator becomes (taking $\hbar$ to be $1$):
+
+$$
+U(t) = e^{-i\hat{H}t} = e^{i\hat{\sigma}_x \int_0^t g(\tau)\alpha(\tau)d\tau}
+$$
+
+From Wikipedia on Pauli matrix exponentials, we define and have:
+
+$$
+\Theta(t) = \int_0^t g(\tau) \alpha(\tau) d\tau
+$$
+which is the overlap integral, and
+
+$$
+U(t) = \cos(\Theta(t)) \hat{I} + i \sin(\Theta(t)) \hat{\sigma}_x
+$$
+
+We can then write $\ket{\psi(t)} = U(t) \ket{\psi_0}$.
+
+We have two cases that we should check:
+
+- Case 1: If the template is orthogonal to the incoming wavepacket, aka $g(t)$ orthogonal to $\alpha(t)$, the atom's state should not change.
+
+$$ \int_0^t g(\tau)\alpha(\tau) d \tau=0 \rightarrow U(t)=\hat{I} $$
+
+- Case 2: If the template perfectly matches the incoming wavepacket, aka $g(t) = \alpha(t)$ (?), the atom's state should become excited. 
+
+$$ \int_0^t g(\tau)\alpha(\tau) d \tau= \frac{\pi}{2} \rightarrow U(t)=i\hat{\sigma}_x $$
+
+```{python}
+Theta = np.array([])
+prob_ground = []
+prob_excited = []
+psi_current = np.array([0, 1])  # initial state |g>
+S = []
+
+for i in range(0, len(time)):
+    # Case 2: Let g be some constant that magically cancels out the integral of alpha. 
+    #if i == 0: g = 0
+    #else: g = (np.pi/2) / integrate.simps(alpha[0:i+1], time[0:i+1]) 
+
+    integral_value, _ = integrate.quad(lambda x: g * alpha_in(x), 0, time[i])
+    Theta = np.append(Theta, integral_value)
+
+    U_matrix = np.cos(integral_value)*np.eye(2) + 1j*np.sin(integral_value) * np.array([[0, 1], [1, 0]])
+    #U_matrix = np.eye(2) # Expected result of Case 1
+    #U_matrix = 1j*np.array([[0, 1], [1, 0]]) # Expected result of Case 2
+
+    p_e, p_g = (U_matrix @ psi_current)[0], (U_matrix @ psi_current)[1]
+    S = np.append(S, p_g.conjugate()*p_e)
+
+    prob_ground = np.append(prob_ground, (np.linalg.norm((U_matrix @ psi_current)[1]))**2)
+    prob_excited = np.append(prob_excited, (np.linalg.norm((U_matrix @ psi_current)[0]))**2)
+
+print('Final S: ', abs(S_expect[-1]))
+print("Max excited state population:", max(prob_excited))
+print("Final excited state population:", prob_excited[-1])
+```
+
+```{python}
+plt.figure(figsize=(6,4))
+plt.plot(time, (Theta), label=r'Overlap Integral $\Theta(t)$')
+plt.plot(time, abs(S), label=r'$S(t)$')
+plt.xlabel('Time'); plt.legend(); plt.grid()
+
+plt.figure(figsize=(6,4))
+plt.plot(time, prob_ground, label=r'$|g\rangle$')
+plt.plot(time, prob_excited, label=r'$|e\rangle$')
+plt.xlabel('Time'); plt.ylabel('Probability'); plt.grid()
+plt.ylim([0, 0.02])
+
+plt.legend()
+print("Max excited state population:", max(prob_excited))
+```
+
+## Adding in decay terms
+
+Currently, we do not account for the atom spontaneously decaying (e to g). For a given bath mode, the Lindblad collapse operators are given by $$L= -g^*\hat{\sigma}_- $$ where $g$ is a function of time and $\hat{\sigma}_-$ is the lowering operator on the TLS ($\ket{g}\bra{e}$).
+
+```{python}
+# DISSIPATION OPERATORES (collapse operators)
+c_op_list = [-np.conjugate(g)*sigmam()] # Lindblad dissipation (collapse) operators
+
+### SIMULATE: starting from the ground state, solve Schrodinger equation (with dissipation) 
+psi0 = basis(2, 1) 
+result = mesolve(H, psi0, time, c_op_list) 
+
+prob_ground = [] # probability of finding state in |g>
+prob_excited = [] # probability of finding state in |e>
+S_expect = [] # expectation value of lowering operator
+
+for i in range(0, len(result.states)):
+    p_g, p_e = result.states[i][1][1], result.states[i][0][0]
+    if np.imag(p_g) != 0 or np.imag(p_e) != 0:
+        print("Imaginary part detected: ", p_g, p_e)
+    S = expect(sigmam(), result.states[i])
+    S_expect = np.append(S_expect, S)
+    
+    prob_ground = np.append(prob_ground, p_g)
+    prob_excited = np.append(prob_excited, p_e)
+```
+
+```{python}
+plt.figure(figsize=(6,4))
+plt.plot(time, abs(S_expect))
+plt.ylabel(r'$\langle S \rangle$'); plt.xlabel('Time'); plt.grid()
+
+plt.figure(figsize=(6,4))
+plt.plot(time, prob_ground, label='Ground State')
+plt.plot(time, prob_excited, label='Excited State')
+#plt.plot(time, alpha, label='Input coherent state')
+#plt.plot(time, abs(S_expect)**2) # Matches with the excited state population
+plt.legend(); plt.grid()
+print("Max excited state population:", max(prob_excited))
+plt.ylim([0, 0.02])
+```
+
+### Include optimal g 
+
+We want to find the optimal shaped write pulse $g(t)$ (aka the ideal coupling) that maximizes excited state probability (the amount of excited state absorbed from the coherent state) with decay. We don't want to change $\alpha(t)$ since we want to accommodate an arbitrary temporal mode. From Eq. 56 in the freespace2level pdf, we have 
+
+$$
+g^*(t) = \frac{k_{||}(t)}{\sqrt{\int_{-\infty}^t |k_{||}(t)|^2dt}}
+$$
+
+where $k_{||}(t)$ is the normalized template that overlaps with the incoming signal. This is similar to Gorshkov but without the phase term. We will set this to be the same shape as $\alpha_{in}$ (Gaussian) since that would be a perfect overlap. 
+
+- What does normalized mean? I interpret this as $ \int_{-\infty}^\infty{k(t)dt} = 1$, should it be $ \int_{-\infty}^\infty{k(t)^2dt} = 1$?
+- How do I test the rejection? If I make a completely orthogonal template to $\alpha$, what does that look like?
+
+```{python}
+### TEMPLATE FUNCTION (k(t) = template at time t)
+def k(t):
+    return gaussian(mu, sigma, t)
+
+### COUPLING FUNCTION (g(t) = coupling strength between atom and light at time t)
+def g(t):
+    integral_value, _ = integrate.quad(lambda x: np.abs(k(x))**2, 0, t) # Denominator -inf to t
+    return k(t) / np.sqrt(integral_value) if integral_value > 0 else 0
+
+g_vals, k_vals = [], []
+for t in time: 
+    g_vals.append(g(t)) 
+    k_vals.append(k(t))
+
+print("Area of template k(t):", integrate.simps(np.array(k_vals)**2, time))
+
+g_vals_smoothed = gaussian_filter1d(g_vals, sigma=10)  # Apply Gaussian smoothing
+def g_smoothed(t):
+    if t == time[0]: return 0
+    else:            return np.interp(t, time, g_vals_smoothed)  # Interpolate smoothed g values
+
+plt.plot(time, g_vals, label='g(t)')
+plt.plot(time, [g_smoothed(t) for t in time], label='Smoothed g(t)')  # Plot smoothed g(t)
+plt.plot(time, [alpha_in(t) for t in time], label=r'$\alpha(t)$')
+plt.plot(time, k_vals, label='k(t)')
+plt.legend(); plt.grid(); plt.xlabel('Time')
+plt.xlim([0, 5]); plt.ylim([0, 14])
+```
+
+```{python}
+### HAMILTONIAN
+H0 = Qobj([[0, 0], [0, 0]]) # time-independent part of Hamiltonian
+H1 = Qobj([[0, 1], [1, 0]])  
+def H1_coeff(t, args): 
+    return g_smoothed(t) * alpha_in(t) 
+H = [H0,[H1, H1_coeff]] # Final Hamiltonian
+
+# DISSIPATION OPERATORES (collapse operators)
+def col_coeff(t, args):  # coefficient function
+    return -np.conjugate(g_smoothed(t))
+c_op_list = [[sigmam(), col_coeff]]  # time-dependent collapse term
+#c_op_list = [] # If you want to test the case without dissipation
+# H[1][1](t, None) = H1_coeff at time t
+```
+
+```{python}
+### SIMULATE: starting from the ground state, solve Schrodinger equation
+psi0 = basis(2, 1) # |g> in the sigma z basis = [1, 0]'
+result = mesolve(H, psi0, time, c_op_list) 
+
+prob_ground = [] # probability of finding state in |g>
+prob_excited = [] # probability of finding state in |e>
+S_expect = [] # expectation value of lowering operator
+for i in range(0, len(result.states)):
+    #p_g, p_e = result.states[i][1][0], result.states[i][0][0] # If you want to test the case without dissipation (with optimal g)
+
+    p_g, p_e = result.states[i][1][1], result.states[i][0][0]    
+    prob_ground = np.append(prob_ground, p_g)
+    prob_excited = np.append(prob_excited, p_e)
+    S_expect = np.append(S_expect, expect(sigmam(), result.states[i]))
+
+print('Final S: ', abs(S_expect[-1]))
+print("Max excited state population:", max(prob_excited))
+print("Final excited state population:", prob_excited[-1])
+
+plt.figure(figsize=(6,4))
+plt.plot(time, abs(S_expect))
+plt.ylabel(r'$\langle S \rangle$'); plt.xlabel('Time'); plt.grid()
+
+plt.figure(figsize=(6,4))
+plt.plot(time, prob_ground, label='Ground State')
+plt.plot(time, prob_excited, label='Excited State')
+#plt.plot(time, alpha, label='Input coherent state')
+plt.legend(); plt.grid(); plt.xlabel('Time')
+plt.ylim([0, 0.02])
+```
+
+We can confirm the validity of our spin curve because from RbQ Method, we expect:
+
+$$S^2 = \int_0^t {\alpha^2_{in}(t)dt}$$
+
+```{python}
+S_squared = []
+for i in range(0, len(time)):
+    if i == 0: S_squared.append(0)
+    else:      S_squared.append(integrate.simps(abs(alpha[0:i])**2, time[0:i]))
+plt.plot(time, np.sqrt(S_squared))
+print(np.sqrt(S_squared[-1]))
+plt.grid()
+```
+
+We will observe in the three-level system that efficiencies don't work well because of the AC stark shift - to correct this, detune frequencies of input light which corrects stark shift during the simulation (phase factor from h). We will pick up phase in the template if we don't account for stark shift (diff dressed state energy shift between the 2 ground states).
+
