@@ -11,6 +11,8 @@ storage = Qobj([[0],[1],[0]])
 excited = Qobj([[0],[0],[1]]) 
 
 sigma_ee = Qobj([[0,0,0],[0,0,0],[0,0,1]])  # |e><e| (excited state population)
+sigma_ss = Qobj([[0,0,0],[0,1,0],[0,0,0]])  # |s><s| (storage state population)
+sigma_gg = Qobj([[1,0,0],[0,0,0],[0,0,0]])  # |g><g| (ground state population)
 
 sigma_ge = Qobj([[0,0,0],[0,0,0],[1,0,0]])  # |e><g| (transition from g to e)
 sigma_eg = Qobj([[0,0,1],[0,0,0],[0,0,0]])  # |g><e| (transition from e to g)
@@ -22,10 +24,8 @@ sigma_gs = Qobj([[0,0,0],[1,0,0],[0,0,0]])  # |s><g| (transition from g to s)
 sigma_sg = Qobj([[0,1,0],[0,0,0],[0,0,0]])  # |g><s| (transition from s to g)
 
 
-
 def three_level_simulation(C, gamma, Delta, time_final, T, N, g_se, g_ge, alpha_in_func, template_func):
     time = np.linspace(0, time_final, N)
-
     alpha = alpha_in_func(time)
     template = template_func(time)
     
@@ -90,7 +90,8 @@ def three_level_simulation(C, gamma, Delta, time_final, T, N, g_se, g_ge, alpha_
     # --------------------------- DISSIPATION ---------------------------
     def col_coeff_eg(t, args):
         return -np.conjugate(g_ge)
-    c_op_list = [[sigma_eg, col_coeff_eg], [sigma_eg, -1/np.sqrt(C)]]
+    c_op_list = [[sigma_eg, col_coeff_eg], [sigma_eg, -1/np.sqrt(C)]] 
+                 #[sigma_es, -g_se], [sigma_es, -1/np.sqrt(C_se)]]  # with decay into storage state
     
     # --------------------------- SIMULATE ---------------------------
     psi0 = ground
@@ -112,7 +113,7 @@ def three_level_simulation(C, gamma, Delta, time_final, T, N, g_se, g_ge, alpha_
 
 
 # PLOT THE PROBABILITIES IN EACH STATE AND STORAGE S
-def plot_probs(time, prob_g, prob_e, prob_s, S):
+def plot_probs(time, prob_g, prob_e, prob_s, S, input_photon_number):
     fig, axs = plt.subplots(3, 1, figsize=(6, 8), sharex=True)
     axs[0].plot(time, prob_g + prob_e + prob_s, color='red', label='Total')
     axs[0].plot(time, prob_g, color='blue', label='Ground')
@@ -122,6 +123,7 @@ def plot_probs(time, prob_g, prob_e, prob_s, S):
     axs[0].legend()
 
     axs[1].plot(time, prob_s, color='orange')
+    axs[1].plot(time, input_photon_number*np.ones(len(time)), color='orange', linestyle='--', label='Limit')
     axs[1].set_ylabel('Probability')
     axs[1].set_title('Storage State Probability')
     axs[1].grid()
@@ -137,6 +139,7 @@ def plot_probs(time, prob_g, prob_e, prob_s, S):
 
     plt.figure(figsize=(6,4))
     plt.plot(time, abs(S), label='|S|')
+    plt.plot(time, input_photon_number**0.5*np.ones(len(time)), color='black', linestyle='--', label='Limit')
     plt.plot(time, np.real(S), label='Re(S)')
     plt.plot(time, np.imag(S), label='Im(S)')
     plt.xlabel('Time')
