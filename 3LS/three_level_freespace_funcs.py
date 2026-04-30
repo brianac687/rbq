@@ -70,9 +70,6 @@ def three_level_simulation(C, gamma, Delta, time_final, T, N, g_se, g_ge, alpha_
     H_coupling_dag = sigma_es
     H_detuning = sigma_ee 
     
-    def H_detuning_coeff(t, args):
-        return Delta
-
     def H_signal_coeff(t, args): 
         return g_ge * alpha_in_func(t) 
 
@@ -85,13 +82,12 @@ def three_level_simulation(C, gamma, Delta, time_final, T, N, g_se, g_ge, alpha_
     def H_coupling_dag_coeff(t, args):
         return g_se * np.conjugate(beta(t))
 
-    H = [[H_detuning, H_detuning_coeff], [H_signal, H_signal_coeff], [H_signal_dag, H_signal_dag_coeff], [H_coupling, H_coupling_coeff], [H_coupling_dag, H_coupling_dag_coeff]] 
+    H = [[H_detuning, Delta], [H_signal, H_signal_coeff], [H_signal_dag, H_signal_dag_coeff], 
+                              [H_coupling, H_coupling_coeff], [H_coupling_dag, H_coupling_dag_coeff]] 
 
     # --------------------------- DISSIPATION ---------------------------
-    def col_coeff_eg(t, args):
-        return -np.conjugate(g_ge)
-    c_op_list = [[sigma_eg, col_coeff_eg], [sigma_eg, -1/np.sqrt(C)]] 
-                 #[sigma_es, -g_se], [sigma_es, -1/np.sqrt(C_se)]]  # with decay into storage state
+    c_op_list = [[sigma_eg, -np.conjugate(g_ge)]] 
+                 #[sigma_es, -g_se]]  # with decay into storage state
     
     # --------------------------- SIMULATE ---------------------------
     psi0 = ground
@@ -109,7 +105,7 @@ def three_level_simulation(C, gamma, Delta, time_final, T, N, g_se, g_ge, alpha_
         prob_e.append(p_e)
         S.append(expect(sigma_gs, state))
     
-    return time, np.array(S), np.array(prob_s), np.array(prob_g), np.array(prob_e)
+    return time, np.array(S), np.array(prob_s), np.array(prob_g), np.array(prob_e), alpha, beta_vals
 
 
 # PLOT THE PROBABILITIES IN EACH STATE AND STORAGE S
