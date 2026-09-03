@@ -86,7 +86,8 @@ def three_level_simulation(C, gamma, Delta, time_final, T, N, g_se, g_ge, alpha_
                               [H_coupling, H_coupling_coeff], [H_coupling_dag, H_coupling_dag_coeff]] 
 
     # --------------------------- DISSIPATION ---------------------------
-    c_op_list = [[sigma_eg, -np.conjugate(g_ge)]] 
+    #c_op_list = [[sigma_eg, -np.conjugate(np.sqrt(2*gamma))]] 
+    c_op_list = [[sigma_eg, -np.conjugate(g_ge)], [sigma_eg, -np.conjugate(g_ge)/np.sqrt(C)]] 
                  #[sigma_es, -g_se]]  # with decay into storage state
     
     # --------------------------- SIMULATE ---------------------------
